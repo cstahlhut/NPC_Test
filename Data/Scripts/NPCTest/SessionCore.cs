@@ -42,42 +42,8 @@ namespace Stollie.NPC_Test
     [MySessionComponentDescriptor(MyUpdateOrder.BeforeSimulation | MyUpdateOrder.AfterSimulation)]
     public class SessionCore : MySessionComponentBase
     {
-        public struct GridsSeatsToSpawnBotsIn
-        {
-            public GridsSeatsToSpawnBotsIn(IMyCubeGrid grid, IMyCockpit cockpit, int shouldSpawn)
-            {
-                Grid = grid;
-                Cockpit = cockpit;
-                ShouldSpawn = shouldSpawn;
-            }
-
-            public IMyCubeGrid Grid { get; }
-            public IMyCockpit Cockpit { get; }
-            public int ShouldSpawn { get; }
-        }
-
-        public struct SpawnedInGridsSeatsCharacters
-        {
-            public SpawnedInGridsSeatsCharacters(IMyCubeGrid grid, IMyCockpit cockpit, IMyCharacter character)
-            {
-                Grid = grid;
-                Cockpit = cockpit;
-                Character = character;
-            }
-
-            public IMyCubeGrid Grid { get; }
-            public IMyCockpit Cockpit { get; }
-            public IMyCharacter Character { get; set; }
-        }
-
         private static SessionCore Instance; // the only way to access session comp from other classes and the only accepted static field.
         
-        private bool remoteApiInit = false;
-        private readonly int seatSpawnRange = 50;
-        private readonly int gridSpawnRange = 100;
-        private int numberOfBotsSpawned = 0;
-        private int maxNumberOfAllowedBots = 1;
-
         private static int tickCounter = 0;
         private static int tickCounter10 = 0;
         private static int tickCounter100 = 0;
@@ -86,20 +52,6 @@ namespace Stollie.NPC_Test
 
         private int botname = 1;
         private RemoteBotAPI remoteBotAPI;
-        
-        private readonly string[] animations = new string[] {"Stretching",  "CheckWrist", "FacePalm", "Cold", "passengerseat_small"};
-        private readonly string[] allowedSeatTypes = new string[] { "Desk", "Couch", "Toilet", "Bathroom", "PassengerSeat", "Bed"};
-
-        internal static readonly Random random = new Random();
-        internal int rnd;
-        
-
-        private List<MyEntity> entitiesNearPlayer = new List<MyEntity>();
-        private List<GridsSeatsToSpawnBotsIn> gridsSeatsToSpawnBotsIn = new List<GridsSeatsToSpawnBotsIn>();
-        private List<SpawnedInGridsSeatsCharacters> spawnedInGridsSeatsCharacters = new List<SpawnedInGridsSeatsCharacters>();
-        private List<IMySlimBlock> detectedGridCockpits = new List<IMySlimBlock>();
-        private List<Vector3I> placeToSpawnList = new List<Vector3I>();
-        private bool handlersInit = false;
         private bool start = false;
 
         public override void LoadData()
@@ -113,10 +65,6 @@ namespace Stollie.NPC_Test
         {
             MyAPIGateway.Entities.OnEntityRemove -= Entities_OnEntityRemove;
             MyAPIGateway.Utilities.MessageEntered -= OnMessageEntered;
-
-            //foreach (var spawnedGridsSeatsCharacters in gridsAndSeatsAndCharactersSpawned)
-            //        spawnedGridsSeatsCharacters.Character.Close();
-            
             remoteBotAPI.Close();
             Instance = null; // important for avoiding this object to remain allocated in memory
         }
@@ -128,105 +76,32 @@ namespace Stollie.NPC_Test
                 if (!MyAPIGateway.Multiplayer.IsServer)
                     return;
 
-                if (!handlersInit == true)
+                if (!start == true)
                 {
                     MyAPIGateway.Utilities.MessageEntered += OnMessageEntered;
                     MyAPIGateway.Entities.OnEntityRemove += Entities_OnEntityRemove;
-                    handlersInit = true;
+                    start = true;
                 }
 
-                if (!remoteApiInit && remoteBotAPI.CanSpawn == true)
+                if (remoteBotAPI.CanSpawn)
                 {
                     MyVisualScriptLogicProvider.SendChatMessage("Ready to spawn...");
-                    remoteApiInit = true;
                 }
 
-                if (!remoteApiInit) return;
-
-                //if (!start) return;
+                if (!remoteBotAPI.CanSpawn) return;
 
                 try
                 {
-                    //MyVisualScriptLogicProvider.ShowNotification(spawnedInGridsSeatsCharacters.Count().ToString()
-                    //    + " Bots spawned. " + gridsSeatsToSpawnBotsIn.Count.ToString() + " Bots remaining in spawn queue", 1);
-                    if (tickCounter == 10)
-                    {
-                        var playerSphere = new BoundingSphereD(MyVisualScriptLogicProvider.GetPlayersPosition(), seatSpawnRange);
-                        entitiesNearPlayer.Clear();
-                        MyGamePruningStructure.GetAllEntitiesInSphere(ref playerSphere, entitiesNearPlayer);
-
-                        //foreach (var spawnedGridsSeatsCharacters in spawnedInGridsSeatsCharacters.ToList())
-                        //{
-                        //    if (!entitiesNearPlayer.Contains(spawnedGridsSeatsCharacters.Cockpit as MyEntity) ||
-                        //        Vector3D.Distance(spawnedGridsSeatsCharacters.Cockpit.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) > seatSpawnRange)
-                        //    {
-                        //        var pilot = spawnedGridsSeatsCharacters.Cockpit?.Pilot;
-                        //        if (pilot != null)
-                        //        {
-                        //            //MyVisualScriptLogicProvider.SendChatMessage("Removing:" + pilot.Name);
-                        //            spawnedGridsSeatsCharacters.Cockpit.RemovePilot();
-                        //            pilot?.Close();
-                        //            spawnedInGridsSeatsCharacters.Remove(spawnedGridsSeatsCharacters);
-                        //            numberOfBotsSpawned--;
-                        //        }
-                        //    }
-
-                        //    if (Vector3D.Distance(spawnedGridsSeatsCharacters.Character.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) > gridSpawnRange)
-                        //    {
-                        //        spawnedGridsSeatsCharacters.Character.Close();
-                        //        spawnedInGridsSeatsCharacters.Remove(spawnedGridsSeatsCharacters);
-                        //        numberOfBotsSpawned--;
-                        //    }
-                        //}
-
-                        foreach (var ent in entitiesNearPlayer)
-                        {
-                            if (ent as IMyCubeGrid != null && (ent as IMyCubeGrid)?.Physics != null)
-                            {
-                                //MyVisualScriptLogicProvider.SendChatMessage("Detected new grid");
-                                var grid = ent as IMyCubeGrid;
-                                
-                                grid?.GetBlocks(detectedGridCockpits, b => b.FatBlock is IMyCockpit);
-                                Extensions.ShellSort(detectedGridCockpits, MyVisualScriptLogicProvider.GetPlayersPosition(), true);
-                                foreach (var gcpit in detectedGridCockpits)
-                                {
-                                    var seat = gcpit.FatBlock as IMyCockpit;
-                                    var blockId = seat?.BlockDefinition.SubtypeId;
-                                    
-                                    if (seat == null || seat.Pilot != null || !allowedSeatTypes.Any(s => blockId.Contains(s)) || seat.CanControlShip ||
-                                        Vector3D.Distance(seat.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) >= seatSpawnRange)                                        
-                                    continue;
-
-                                    rnd = random.Next(0, 3);
-                                    var gridSeat = new GridsSeatsToSpawnBotsIn(grid, seat, rnd);
-                                    if (!gridsSeatsToSpawnBotsIn.Any(gridAndSeats => gridAndSeats.Cockpit == seat))
-                                    {
-                                        MyVisualScriptLogicProvider.SendChatMessage("Added: " + gridSeat.Cockpit.CustomName + " to spawn list");
-                                        gridsSeatsToSpawnBotsIn.Add(gridSeat);
-                                    }
-                                }
-                            }
-                        }
-
                         // Bot spawning
-                        if (numberOfBotsSpawned <= maxNumberOfAllowedBots)
-                        {
-                            if (gridsSeatsToSpawnBotsIn.Count != 0)
+                    if (numberOfBotsSpawned <= maxNumberOfAllowedBots)
+                    {
+                            //if (gridsAndSeatsToSpawnBotsIn[0].ShouldSpawn > 0 && gridsAndSeatsToSpawnBotsIn[0].Cockpit != null && gridsAndSeatsToSpawnBotsIn[0].Grid != null)
+                            if (gridsSeatsToSpawnBotsIn[0].Cockpit != null && gridsSeatsToSpawnBotsIn[0].Grid != null &&
+                                Vector3D.Distance(gridsSeatsToSpawnBotsIn[0].Cockpit.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) <= seatSpawnRange)
                             {
-                                //if (gridsAndSeatsToSpawnBotsIn[0].ShouldSpawn > 0 && gridsAndSeatsToSpawnBotsIn[0].Cockpit != null && gridsAndSeatsToSpawnBotsIn[0].Grid != null)
-                                if (gridsSeatsToSpawnBotsIn[0].Cockpit != null && gridsSeatsToSpawnBotsIn[0].Grid != null &&
-                                    Vector3D.Distance(gridsSeatsToSpawnBotsIn[0].Cockpit.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) <= seatSpawnRange)
-                                {
-                                    SpawnBotInSeat(gridsSeatsToSpawnBotsIn[0].Grid, gridsSeatsToSpawnBotsIn[0].Cockpit);
-                                    gridsSeatsToSpawnBotsIn.Remove(gridsSeatsToSpawnBotsIn[0]);
-                                }
-                                //else if (gridsAndSeatsToSpawnBotsIn[0].ShouldSpawn == 0 && gridsAndSeatsToSpawnBotsIn[0].Cockpit != null && gridsAndSeatsToSpawnBotsIn[0].Grid != null)
-                                //{
-                                //    SpawnBotWithoutSeat(gridsAndSeatsToSpawnBotsIn[0].Grid);
-                                //    gridsAndSeatsToSpawnBotsIn.RemoveAtFast(0);
-                                //}
+                                SpawnBotInSeat(gridsSeatsToSpawnBotsIn[0].Grid, gridsSeatsToSpawnBotsIn[0].Cockpit);
+                                gridsSeatsToSpawnBotsIn.Remove(gridsSeatsToSpawnBotsIn[0]);
                             }
-                        }
                     }
                 }
                 catch (Exception ex)
