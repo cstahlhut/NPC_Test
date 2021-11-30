@@ -42,117 +42,189 @@ namespace Stollie.NPC_Test
     [MySessionComponentDescriptor(MyUpdateOrder.BeforeSimulation | MyUpdateOrder.AfterSimulation)]
     public class SessionCore : MySessionComponentBase
     {
-        public static SessionCore Instance; // the only way to access session comp from other classes and the only accepted static field.
+        public struct GridsSeatsToSpawnBotsIn
+        {
+            public GridsSeatsToSpawnBotsIn(IMyCubeGrid grid, IMyCockpit cockpit, int shouldSpawn)
+            {
+                Grid = grid;
+                Cockpit = cockpit;
+                ShouldSpawn = shouldSpawn;
+            }
 
-        private bool init = false;
-        public static float tickCounterAnimation = 0.0f;
-        public static int tickCounter10 = 0;
+            public IMyCubeGrid Grid { get; }
+            public IMyCockpit Cockpit { get; }
+            public int ShouldSpawn { get; }
+        }
+
+        public struct SpawnedInGridsSeatsCharacters
+        {
+            public SpawnedInGridsSeatsCharacters(IMyCubeGrid grid, IMyCockpit cockpit, IMyCharacter character)
+            {
+                Grid = grid;
+                Cockpit = cockpit;
+                Character = character;
+            }
+
+            public IMyCubeGrid Grid { get; }
+            public IMyCockpit Cockpit { get; }
+            public IMyCharacter Character { get; set; }
+        }
+
+        private static SessionCore Instance; // the only way to access session comp from other classes and the only accepted static field.
+        
+        private bool remoteApiInit = false;
+        private readonly int seatSpawnRange = 50;
+        private readonly int gridSpawnRange = 100;
+        private int numberOfBotsSpawned = 0;
+        private int maxNumberOfAllowedBots = 1;
+
+        private static int tickCounter = 0;
+        private static int tickCounter10 = 0;
+        private static int tickCounter100 = 0;
+        private static int tickCounter500 = 0;
+        private static int tickCounterAnimation = 0;
+
         private int botname = 1;
-        public RemoteBotAPI remoteBotAPI;
+        private RemoteBotAPI remoteBotAPI;
         
-        private bool setBotSpawnCount;
-        public List<IMySlimBlock> gridBlocks = new List<IMySlimBlock>();
-        
-        public HashSet<IMyCharacter> characters = new HashSet<IMyCharacter>();
-        private List<IMyCockpit> botSeats = new List<IMyCockpit>();
-        private string[] animations = new string[] {"Stretching",  "CheckWrist", "FacePalm", "Cold", "passengerseat_small"};
-        private string[] allowedSeatTypes = new string[] { "Desk", "Couch", "Toilet", "Bathroom", "PassengerSeat", "Bed"};
+        private readonly string[] animations = new string[] {"Stretching",  "CheckWrist", "FacePalm", "Cold", "passengerseat_small"};
+        private readonly string[] allowedSeatTypes = new string[] { "Desk", "Couch", "Toilet", "Bathroom", "PassengerSeat", "Bed"};
 
         internal static readonly Random random = new Random();
         internal int rnd;
-        private int numberOfBotsToSpawn = 0;
-        private bool setBotSpawned;
-        private int tickCounter100 = 0;
-        private int tickCounter500 = 0;
-        private bool spawningBots = false;
-        private Dictionary<IMyCockpit, IMyCubeGrid> gridsAndCockpits = new Dictionary<IMyCockpit, IMyCubeGrid>();
+        
+
+        private List<MyEntity> entitiesNearPlayer = new List<MyEntity>();
+        private List<GridsSeatsToSpawnBotsIn> gridsSeatsToSpawnBotsIn = new List<GridsSeatsToSpawnBotsIn>();
+        private List<SpawnedInGridsSeatsCharacters> spawnedInGridsSeatsCharacters = new List<SpawnedInGridsSeatsCharacters>();
+        private List<IMySlimBlock> detectedGridCockpits = new List<IMySlimBlock>();
+        private List<Vector3I> placeToSpawnList = new List<Vector3I>();
+        private bool handlersInit = false;
+        private bool start = false;
 
         public override void LoadData()
         {
             Instance = this;
             remoteBotAPI = new RemoteBotAPI();
-            MyAPIGateway.Entities.OnEntityAdd += Entities_OnEntityAdd;
+
         }
+        
         protected override void UnloadData()
         {
-            Instance = null; // important for avoiding this object to remain allocated in memory
-            foreach (var ent in MyEntities.GetEntities().ToList())
-            {
-                if (ent.EntityId == MyAPIGateway.Session.Player.Character.EntityId)
-                    continue;
+            MyAPIGateway.Entities.OnEntityRemove -= Entities_OnEntityRemove;
+            MyAPIGateway.Utilities.MessageEntered -= OnMessageEntered;
 
-                IMyCharacter character = ent as IMyCharacter;
-                if (character != null && (character.Name.Contains("Bot") || string.IsNullOrEmpty(character.Name)))
-                {
-                    character.Kill();
-                    character.Close();
-                }
-            }
+            //foreach (var spawnedGridsSeatsCharacters in gridsAndSeatsAndCharactersSpawned)
+            //        spawnedGridsSeatsCharacters.Character.Close();
+            
             remoteBotAPI.Close();
-            MyAPIGateway.Utilities.MessageEntered -= onMessageEntered;
-        }
-
-        private void Entities_OnEntityAdd(IMyEntity obj)
-        {
-            if (obj as IMyCharacter != null)
-            {
-                var character = obj as IMyCharacter;
-                if (!characters.Contains(character))
-                    characters.Add(character);
-                //MyVisualScriptLogicProvider.SendChatMessage("Added: " + character.Name);
-            }
+            Instance = null; // important for avoiding this object to remain allocated in memory
         }
 
         public override void UpdateAfterSimulation()
         {
             try // example try-catch for catching errors and notifying player, use only for non-critical code!
             {
-                if (!init && remoteBotAPI.CanSpawn == true)
+                if (!MyAPIGateway.Multiplayer.IsServer)
+                    return;
+
+                if (!handlersInit == true)
                 {
-                    MyAPIGateway.Utilities.MessageEntered += onMessageEntered;
-                    foreach (var ent in MyEntities.GetEntities())
-                    {
-                        if (ent as IMyCharacter != null && !characters.Contains(ent as IMyCharacter))
-                        {
-                            var character = ent as IMyCharacter;
-                            characters.Add(character);
-                        }
-                    }
-                    
-                    MyVisualScriptLogicProvider.SendChatMessage("Ready to spawn...");
-                    init = true;
+                    MyAPIGateway.Utilities.MessageEntered += OnMessageEntered;
+                    MyAPIGateway.Entities.OnEntityRemove += Entities_OnEntityRemove;
+                    handlersInit = true;
                 }
 
-                if (!init) return;
+                if (!remoteApiInit && remoteBotAPI.CanSpawn == true)
+                {
+                    MyVisualScriptLogicProvider.SendChatMessage("Ready to spawn...");
+                    remoteApiInit = true;
+                }
+
+                if (!remoteApiInit) return;
+
+                //if (!start) return;
 
                 try
                 {
-                    if (tickCounter100 == 10 && spawningBots == false)
+                    //MyVisualScriptLogicProvider.ShowNotification(spawnedInGridsSeatsCharacters.Count().ToString()
+                    //    + " Bots spawned. " + gridsSeatsToSpawnBotsIn.Count.ToString() + " Bots remaining in spawn queue", 1);
+                    if (tickCounter == 10)
                     {
-                        var entitiesNearPlayer = MyVisualScriptLogicProvider.GetEntitiesInSphere(MyVisualScriptLogicProvider.GetPlayersPosition(), 15.0f);
+                        var playerSphere = new BoundingSphereD(MyVisualScriptLogicProvider.GetPlayersPosition(), seatSpawnRange);
+                        entitiesNearPlayer.Clear();
+                        MyGamePruningStructure.GetAllEntitiesInSphere(ref playerSphere, entitiesNearPlayer);
+
+                        //foreach (var spawnedGridsSeatsCharacters in spawnedInGridsSeatsCharacters.ToList())
+                        //{
+                        //    if (!entitiesNearPlayer.Contains(spawnedGridsSeatsCharacters.Cockpit as MyEntity) ||
+                        //        Vector3D.Distance(spawnedGridsSeatsCharacters.Cockpit.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) > seatSpawnRange)
+                        //    {
+                        //        var pilot = spawnedGridsSeatsCharacters.Cockpit?.Pilot;
+                        //        if (pilot != null)
+                        //        {
+                        //            //MyVisualScriptLogicProvider.SendChatMessage("Removing:" + pilot.Name);
+                        //            spawnedGridsSeatsCharacters.Cockpit.RemovePilot();
+                        //            pilot?.Close();
+                        //            spawnedInGridsSeatsCharacters.Remove(spawnedGridsSeatsCharacters);
+                        //            numberOfBotsSpawned--;
+                        //        }
+                        //    }
+
+                        //    if (Vector3D.Distance(spawnedGridsSeatsCharacters.Character.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) > gridSpawnRange)
+                        //    {
+                        //        spawnedGridsSeatsCharacters.Character.Close();
+                        //        spawnedInGridsSeatsCharacters.Remove(spawnedGridsSeatsCharacters);
+                        //        numberOfBotsSpawned--;
+                        //    }
+                        //}
+
                         foreach (var ent in entitiesNearPlayer)
                         {
-                            var ent2 = MyVisualScriptLogicProvider.GetEntityById(ent);
-                            if (ent2 as IMyCubeGrid != null && (ent2 as IMyCubeGrid)?.Physics != null)
+                            if (ent as IMyCubeGrid != null && (ent as IMyCubeGrid)?.Physics != null)
                             {
-                                var grid = ent2 as IMyCubeGrid;
-                                List<IMySlimBlock> detectedGridCockpits = new List<IMySlimBlock>();
+                                //MyVisualScriptLogicProvider.SendChatMessage("Detected new grid");
+                                var grid = ent as IMyCubeGrid;
+                                
                                 grid?.GetBlocks(detectedGridCockpits, b => b.FatBlock is IMyCockpit);
-                                Dictionary<IMyCubeGrid, IMyCockpit> gridCockpits = new Dictionary<IMyCubeGrid, IMyCockpit>();
-
+                                Extensions.ShellSort(detectedGridCockpits, MyVisualScriptLogicProvider.GetPlayersPosition(), true);
                                 foreach (var gcpit in detectedGridCockpits)
                                 {
                                     var seat = gcpit.FatBlock as IMyCockpit;
                                     var blockId = seat?.BlockDefinition.SubtypeId;
-
-                                    if (seat == null || seat.Pilot != null || !allowedSeatTypes.Any(s => blockId.Contains(s)) || seat.CanControlShip)
-                                        continue;
-
-                                    if (!gridsAndCockpits.ContainsKey(seat))
-                                        gridsAndCockpits.Add(seat, grid);
                                     
-                                    spawningBots = true;
+                                    if (seat == null || seat.Pilot != null || !allowedSeatTypes.Any(s => blockId.Contains(s)) || seat.CanControlShip ||
+                                        Vector3D.Distance(seat.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) >= seatSpawnRange)                                        
+                                    continue;
+
+                                    rnd = random.Next(0, 3);
+                                    var gridSeat = new GridsSeatsToSpawnBotsIn(grid, seat, rnd);
+                                    if (!gridsSeatsToSpawnBotsIn.Any(gridAndSeats => gridAndSeats.Cockpit == seat))
+                                    {
+                                        MyVisualScriptLogicProvider.SendChatMessage("Added: " + gridSeat.Cockpit.CustomName + " to spawn list");
+                                        gridsSeatsToSpawnBotsIn.Add(gridSeat);
+                                    }
                                 }
+                            }
+                        }
+
+                        // Bot spawning
+                        if (numberOfBotsSpawned <= maxNumberOfAllowedBots)
+                        {
+                            if (gridsSeatsToSpawnBotsIn.Count != 0)
+                            {
+                                //if (gridsAndSeatsToSpawnBotsIn[0].ShouldSpawn > 0 && gridsAndSeatsToSpawnBotsIn[0].Cockpit != null && gridsAndSeatsToSpawnBotsIn[0].Grid != null)
+                                if (gridsSeatsToSpawnBotsIn[0].Cockpit != null && gridsSeatsToSpawnBotsIn[0].Grid != null &&
+                                    Vector3D.Distance(gridsSeatsToSpawnBotsIn[0].Cockpit.GetPosition(), MyVisualScriptLogicProvider.GetPlayersPosition()) <= seatSpawnRange)
+                                {
+                                    SpawnBotInSeat(gridsSeatsToSpawnBotsIn[0].Grid, gridsSeatsToSpawnBotsIn[0].Cockpit);
+                                    gridsSeatsToSpawnBotsIn.Remove(gridsSeatsToSpawnBotsIn[0]);
+                                }
+                                //else if (gridsAndSeatsToSpawnBotsIn[0].ShouldSpawn == 0 && gridsAndSeatsToSpawnBotsIn[0].Cockpit != null && gridsAndSeatsToSpawnBotsIn[0].Grid != null)
+                                //{
+                                //    SpawnBotWithoutSeat(gridsAndSeatsToSpawnBotsIn[0].Grid);
+                                //    gridsAndSeatsToSpawnBotsIn.RemoveAtFast(0);
+                                //}
                             }
                         }
                     }
@@ -164,55 +236,46 @@ namespace Stollie.NPC_Test
 
                 try
                 {
-                    if (spawningBots == true)
-                    {
-                        foreach (var gridCockpit in gridsAndCockpits.ToList())
-                        {
-                            if (tickCounter100 == 100)
-                            {
-                                SpawnBot(gridCockpit.Value, gridCockpit.Key);
-                                tickCounter100++;
-                                gridsAndCockpits.Remove(gridCockpit.Key);
-                            }
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    MyVisualScriptLogicProvider.SendChatMessage("Spawn Exception: " + e.ToString());
-                }
-
-                try
-                {
                     if (tickCounterAnimation == 1025)
                     {
-                        foreach (var character in characters.ToList())
-                        {
-                            if (character.InScene && character.Name.Contains("Bot") && character != null)
-                            {
-                                rnd = random.Next(0, animations.Count()-2);
-                                character.TriggerCharacterAnimationEvent("emote", true);
-                                character.TriggerCharacterAnimationEvent(animations[rnd], true);
-                            }
-                        }
+                        //foreach (var character in gridsAndSeatsAndCharactersSpawned.ToList())
+                        //{
+                        //    if (character.Character == null)
+                        //        continue;
+
+                        //    if (character.Character.InScene && character.Character.Name.Contains("Bot"))
+                        //    {
+                        //        rnd = random.Next(0, animations.Count()-2);
+                        //        character.Character.TriggerCharacterAnimationEvent("emote", true);
+                        //        character.Character.TriggerCharacterAnimationEvent(animations[rnd], true);
+                        //    }
+                        //}
                     }
                 }
                 catch (Exception e)
                 {
                     MyVisualScriptLogicProvider.SendChatMessage("Animation Error: " + e.ToString());
                 }
-                
+
+                if (tickCounter == 10)
+                    tickCounter = 0;
+
                 if (tickCounter10 == 10)
                     tickCounter10 = 0;
 
                 if (tickCounter100 > 100)
                     tickCounter100 = 0;
 
+                if (tickCounter500 > 500)
+                    tickCounter500 = 0;
+
                 if (tickCounterAnimation == 1025)
                     tickCounterAnimation = 0;
 
+                tickCounter++;
                 tickCounter10++;
                 tickCounter100++;
+                tickCounter500++;
                 tickCounterAnimation++;
             }
             catch (Exception e) // NOTE: never use try-catch for code flow or to ignore errors! catching has a noticeable performance impact.
@@ -224,11 +287,22 @@ namespace Stollie.NPC_Test
             }
         }
 
-        public void SpawnBot(IMyCubeGrid grid, IMyCockpit seat)
+        private void Entities_OnEntityRemove(IMyEntity ent)
+        {
+            var grid = ent as IMyCubeGrid;
+            foreach (var gridsToSpawnIn in gridsSeatsToSpawnBotsIn.ToList())
+            {
+                if (gridsToSpawnIn.Grid == grid)
+                {
+                    gridsSeatsToSpawnBotsIn.Remove(gridsToSpawnIn);
+                }
+            }
+        }
+
+        public void SpawnBotInSeat(IMyCubeGrid grid, IMyCockpit seat)
         {
             try
             {
-                MyVisualScriptLogicProvider.SendChatMessage("Spawning bot#: " + botname);
                 var rndRed = random.Next(0, 255);
                 var rndGreen = random.Next(0, 255);
                 var rndBlue = random.Next(0, 255);
@@ -237,9 +311,145 @@ namespace Stollie.NPC_Test
                 var rndY = random.Next(0, 10);
                 var rndZ = random.Next(0, 10);
                 var mat = MatrixD.CreateFromQuaternion(Quaternion.CreateFromRotationMatrix(MyAPIGateway.Session.Player.Character.WorldMatrix * -1));
-                //mat.Translation = new Vector3D(rndX, 0, 0);
 
-                var spawnVariaton = random.Next(0, 4);
+                var spawnVariaton = random.Next(0, 1);
+                var spawnType = "";
+
+                if (spawnVariaton == 0)
+                    spawnType = "Default_Astronaut";
+                if (spawnVariaton == 1)
+                    spawnType = "Police_Bot";
+                if (spawnVariaton == 2)
+                    spawnType = "Target_Dummy";
+                if (spawnVariaton == 3)
+                    spawnType = "Boss_Bot";
+
+                //var localPlayerPosition = MyAPIGateway.Session.LocalHumanPlayer.Character.PositionComp.WorldMatrixRef;
+                //if (localPlayerPosition != null)
+                //{
+                //    var ob = new MyObjectBuilder_Character()
+                //    {
+                //        Name = "Bot " + botname.ToString(),
+                //        SubtypeName = "Default_Astronaut",
+                //        CharacterModel = "Default_Astronaut",
+                //        EntityId = 0,
+                //        AIMode = true,
+                //        JetpackEnabled = false,
+                //        EnableBroadcasting = false,
+                //        NeedsOxygenFromSuit = false,
+                //        OxygenLevel = 1,
+                //        MovementState = MyCharacterMovementEnum.Standing,
+                //        PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.Enabled,
+                //        PositionAndOrientation = new MyPositionAndOrientation(MyAPIGateway.Session.LocalHumanPlayer.Character.WorldAABB.Center +
+                //            MyAPIGateway.Session.LocalHumanPlayer.Character.WorldMatrix.Forward * 2, localPlayerPosition.Forward, localPlayerPosition.Up),
+                //        Health = 1000,
+                //        OwningPlayerIdentityId = MyAPIGateway.Session.LocalHumanPlayer.IdentityId,
+                //        ColorMaskHSV = Color.White.ColorToHSV(),
+                //    };
+
+                //    var bot = MyEntities.CreateFromObjectBuilder(ob, true) as IMyCharacter;
+                //    if (bot != null)
+                //    {
+                //        MyVisualScriptLogicProvider.SendChatMessage("Spawning into SEAT bot#: " + botname + " into " + seat.CustomName);
+                //        bot.Save = false;
+                //        bot.Synchronized = true;
+                //        bot.Flags &= ~VRage.ModAPI.EntityFlags.NeedsUpdate100;
+
+                //        //if (MyAPIGateway.Session.LocalHumanPlayer.Character.ControllerInfo.Controller != null)
+                //        //    MyAPIGateway.Session.LocalHumanPlayer.Character.ControllerInfo.Controller.TakeControl(bot);
+
+                //        MyEntities.Add((MyEntity)bot, true);
+
+
+                //        if (seat != null)
+                //            SeatBot(seat, bot);
+
+
+                //        var gridSeatCharacter = new GridsAndSeatsAndCharacters(grid, seat, bot);
+                //        gridsAndSeatsAndCharactersSpawned.Add(gridSeatCharacter);
+                //        numberOfBotsSpawned++;
+                //        botname++;
+                //    }
+                //}
+
+
+                //var localPlayerPosition = MyAPIGateway.Session.LocalHumanPlayer.Character.PositionComp.WorldMatrixRef;
+                //var blockId = seat?.BlockDefinition.SubtypeId;
+                //if (grid != null && grid as MyCubeGrid != null && localPlayerPosition != null && seat != null &&
+                //    seat.Pilot == null && allowedSeatTypes.Any(s => blockId.Contains(s)) && !seat.CanControlShip)
+                //{
+                //    MyVisualScriptLogicProvider.SendChatMessage("Spawning into SEAT bot#: " + botname + " into " + seat.CustomName);
+                //    var bot = MyVisualScriptLogicProvider.SpawnBot("Default_Astronaut", seat.GetPosition(), localPlayerPosition.Forward, localPlayerPosition.Up, "Bot " + botname.ToString());
+                //    var newbot = MyEntities.GetEntityById(bot) as IMyCharacter;
+                //    if (newbot != null && seat != null)
+                //    {
+                //        newbot.Save = false;
+                //        newbot.Synchronized = true;
+                //        newbot.Flags &= ~VRage.ModAPI.EntityFlags.None;
+                //        remoteBotAPI.SetBotTarget(newbot.EntityId, null);
+                //        SeatBot(seat, newbot);
+
+                //        var gridsSeatsAndCharactersSpawnedIn = new SpawnedInGridsSeatsCharacters(grid, seat, newbot);
+                //        spawnedInGridsSeatsCharacters.Add(gridsSeatsAndCharactersSpawnedIn);
+                //        numberOfBotsSpawned++;
+                //        botname++;
+                //    }
+                //}
+
+
+                var localPlayerPosition = MyAPIGateway.Session.LocalHumanPlayer.Character.PositionComp.WorldMatrixRef;
+                var blockId = seat?.BlockDefinition.SubtypeId;
+                if (grid != null && grid as MyCubeGrid != null && localPlayerPosition != null && seat != null &&
+                    seat.Pilot == null && allowedSeatTypes.Any(s => blockId.Contains(s)) && !seat.CanControlShip)
+                {
+                    MyVisualScriptLogicProvider.SendChatMessage("Spawning SEAT bot#: " + botname);
+                    IMyCharacter newbot = remoteBotAPI.SpawnBot(spawnType, "Bot" + " " + botname.ToString(), new MyPositionAndOrientation(MyAPIGateway.Session.LocalHumanPlayer.Character.WorldAABB.Center +
+                                MyAPIGateway.Session.LocalHumanPlayer.Character.WorldMatrix.Forward * 2, localPlayerPosition.Forward, localPlayerPosition.Up),
+                    (MyCubeGrid)grid, "BRUISER", MyAPIGateway.Session.LocalHumanPlayer.IdentityId, new Color(rndRed, rndGreen, rndBlue, 255));
+
+                    //IMyCharacter newbot = remoteBotAPI.SpawnBot(spawnType, "Bot" + " " + botname.ToString(), new MyPositionAndOrientation(mat),
+                    //    (MyCubeGrid)grid, "BRUISER", null, new Color(rndRed, rndGreen, rndBlue, 255));
+
+                    var controller1 = newbot as VRage.Game.ModAPI.Interfaces.IMyControllableEntity;
+                    var controller2 = newbot as Sandbox.Game.Entities.IMyControllableEntity;
+                    controller1?.SwitchHelmet();
+                    //controller2?.SwitchBroadcasting();
+
+                    if (newbot != null && seat != null)
+                    {
+                        newbot.Save = false;
+                        newbot.Synchronized = true;
+                        
+                        remoteBotAPI.SetBotTarget(newbot.EntityId, null);
+                        //SeatBot(seat, newbot);
+
+                        var gridsSeatsAndCharactersSpawnedIn = new SpawnedInGridsSeatsCharacters(grid, seat, newbot);
+                        spawnedInGridsSeatsCharacters.Add(gridsSeatsAndCharactersSpawnedIn);
+                        numberOfBotsSpawned++;
+                        botname++;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                MyAPIGateway.Utilities.ShowNotification($"[ ERROR: {GetType().FullName}: {e.Message} | Send SpaceEngineers.Log to mod author ]", 10000, MyFontEnum.Red);
+            }
+        }
+
+        public void SpawnBotWithoutSeat(IMyCubeGrid grid)
+        {
+            try
+            {
+                var rndRed = random.Next(0, 255);
+                var rndGreen = random.Next(0, 255);
+                var rndBlue = random.Next(0, 255);
+
+                var rndX = random.Next(0, 2);
+                var rndY = random.Next(0, 10);
+                var rndZ = random.Next(0, 10);
+                var mat = MatrixD.CreateFromQuaternion(Quaternion.CreateFromRotationMatrix(MyAPIGateway.Session.Player.Character.WorldMatrix * -1));
+
+                var spawnVariaton = random.Next(0, 1);
                 var spawnType = "";
 
                 if (spawnVariaton == 0)
@@ -251,26 +461,37 @@ namespace Stollie.NPC_Test
                 if (spawnVariaton == 3)
                     spawnType = "Boss_Bot";
 
-                IMyCharacter newbot = remoteBotAPI.SpawnBot(spawnType, "Bot" + " " + botname.ToString(), new MyPositionAndOrientation(mat),
-                (MyCubeGrid)grid, "BRUISER", null, new Color(rndRed, rndGreen, rndBlue, 255));
-
-                var controller1 = newbot as VRage.Game.ModAPI.Interfaces.IMyControllableEntity;
-                var controller2 = newbot as Sandbox.Game.Entities.IMyControllableEntity;
-                controller1?.SwitchHelmet();
-                //controller2?.SwitchBroadcasting();
-
-                if (newbot != null)
+                if (grid != null && grid as MyCubeGrid != null)                   
                 {
-                    remoteBotAPI.SetBotTarget(newbot.EntityId, null);
+                    MyVisualScriptLogicProvider.SendChatMessage("Spawning on GRID bot#: " + botname);
+                    placeToSpawnList.Clear();
+                    remoteBotAPI.GetAvailableGridNodes(grid as MyCubeGrid, 1, null, true);
+                    if (placeToSpawnList != null && placeToSpawnList.Count != 0)
+                    {
+                        int r = random.Next(placeToSpawnList.Count);
+                        var placeToSpawn = grid.GridIntegerToWorld(placeToSpawnList.ElementAtOrDefault(0));
+                        if (placeToSpawn != null)
+                        {
+                            var localPlayerPosition = MyAPIGateway.Session.LocalHumanPlayer.Character.PositionComp.WorldMatrixRef;
+                            IMyCharacter newbot = remoteBotAPI.SpawnBot(spawnType, "Bot" + " " + botname.ToString(),
+                                new MyPositionAndOrientation(placeToSpawn, localPlayerPosition.Forward, localPlayerPosition.Up),
+                                 grid as MyCubeGrid, "BRUISER", null, new Color(rndRed, rndGreen, rndBlue, 255));
+
+                            var controller1 = newbot as VRage.Game.ModAPI.Interfaces.IMyControllableEntity;
+                            var controller2 = newbot as Sandbox.Game.Entities.IMyControllableEntity;
+                            controller1?.SwitchHelmet();
+                            //controller2?.SwitchBroadcasting();
+
+                            if (newbot != null)
+                                remoteBotAPI.SetBotTarget(newbot.EntityId, null);
+
+                            var gridSeatCharacter = new SpawnedInGridsSeatsCharacters(grid, null, newbot);
+                            spawnedInGridsSeatsCharacters.Add(gridSeatCharacter);
+                            numberOfBotsSpawned++;
+                            botname++;
+                        }
+                    }
                 }
-
-                if (!characters.Contains(newbot))
-                    characters.Add(newbot);
-
-                SeatBot(newbot, seat);
-
-                botname++;
-                spawningBots = false;
             }
             catch (Exception e)
             {
@@ -278,18 +499,18 @@ namespace Stollie.NPC_Test
             }
         }
 
-        private void SeatBot(IMyCharacter character, IMyCockpit seat)
+        private void SeatBot(IMyCockpit seat, IMyCharacter character)
         {
             // This try/catch shouldnt exist but theres an problem with the main mod JTurp is aware of! Fixed in his next release.
             try
             {
-                MyVisualScriptLogicProvider.SendChatMessage("Seating: " + character.DisplayName);
                 var blockId = seat?.BlockDefinition.SubtypeId;
 
-                if (seat == null || seat.Pilot != null || !allowedSeatTypes.Any(s => blockId.Contains(s)) || seat.CanControlShip ||
-                    character.ControllerInfo.Controller.ControlledEntity.Entity as IMyCockpit != null)
+                if (seat == null || seat.Pilot != null || !allowedSeatTypes.Any(s => blockId.Contains(s)) || seat.CanControlShip)
                     return;
 
+                MyVisualScriptLogicProvider.SendChatMessage("Putting " + botname + " into " + seat.CustomName);
+                
                 List<IMyUseObject> useObjs = new List<IMyUseObject>();
                 useObjs.Clear();
                 var useComp = seat.Components.Get<MyUseObjectsComponentBase>();
@@ -307,81 +528,73 @@ namespace Stollie.NPC_Test
             }
         }
 
-        private void onMessageEntered(string messageText, ref bool sendToOthers)
+        private void OnMessageEntered(string messageText, ref bool sendToOthers)
         {
             try
             {
                 sendToOthers = false;
-                if (messageText == "go")
+                if (messageText == "start")
                 {
-                    MyVisualScriptLogicProvider.SendChatMessage("Executing Animation...");
-                    //bool flag = MyAPIGateway.Session.ControlledObject is MyCockpit;
-                    //IMyCharacter myCharacter = flag ? ((MyShipController)MyAPIGateway.Session.ControlledObject).Pilot : MyAPIGateway.Session.LocalHumanPlayer.Character;
-                    //if (myCharacter != null)
-                    //{
-                    //    myCharacter.TriggerCharacterAnimationEvent("emote", true);
-                    //    myCharacter.TriggerCharacterAnimationEvent("Wave", true);
-                    //}
-
-                    foreach (var character in characters.ToList())
-                    {
-                        if (character == MyAPIGateway.Session.LocalHumanPlayer.Character)
-                            continue;
-                        character.TriggerCharacterAnimationEvent("emote", true);
-                        character.TriggerCharacterAnimationEvent("Wave", true);
-                    }
+                    MyVisualScriptLogicProvider.SendChatMessage("Starting...");
+                    start = true;
                 }
 
-                if (messageText == "id")
+                if (messageText == "scount")
                 {
-                    var foundId = MyAPIGateway.Session?.Factions.TryGetFactionByTag("JKHP").FounderId;
-                    var foundIdentId = MyAPIGateway.Players.TryGetIdentityId((ulong)foundId);
-                    MyVisualScriptLogicProvider.SendChatMessage("Local: " + MyAPIGateway.Session.LocalHumanPlayer.IdentityId.ToString());
-                    MyVisualScriptLogicProvider.SendChatMessage("Player: " + MyAPIGateway.Session.Player.IdentityId.ToString());
-                    MyVisualScriptLogicProvider.SendChatMessage("Faction: " + foundIdentId.ToString());
-                }
-
-                if (messageText == "sb")
-                {
-                    if (MyAPIGateway.Session.IsServer)
-                    {
-                        numberOfBotsToSpawn = 3;
-                        MyVisualScriptLogicProvider.SendChatMessage(numberOfBotsToSpawn.ToString());
-                    }
+                    MyVisualScriptLogicProvider.SendChatMessage("Spawn list count: " + gridsSeatsToSpawnBotsIn.Count());
                 }
 
                 if (messageText == "list")
                 {
                     MyVisualScriptLogicProvider.SendChatMessage("Listing...");
-                    foreach (var character in characters.ToList())
+                    HashSet<IMyEntity> ents2 = new HashSet<IMyEntity>();
+                    MyAPIGateway.Entities.GetEntities(ents2);
+                    foreach (var ent in ents2)
                     {
-                        if (character.Name.Contains("Bot"))
-                            MyVisualScriptLogicProvider.SendChatMessage(character.Name);
+                        MyVisualScriptLogicProvider.SendChatMessage(ent.ToString());
+                        //IMyCharacter character = ent as IMyCharacter;
+                        //if (character != null && (character.Name.Contains("Bot") || string.IsNullOrEmpty(character.Name)))
+                        //{
+                        //    var newbot = character;
+                        //    MyVisualScriptLogicProvider.SendChatMessage("BotName: " + character.Name.ToString());
+                        //}
                     }
                 }
 
-                if (messageText == ("del"))
+                if (messageText == "del")
                 {
-                    MyVisualScriptLogicProvider.SendChatMessage("Deleting...");
+                    MyVisualScriptLogicProvider.SendChatMessage("Deleting..");
                     foreach (var ent in MyEntities.GetEntities().ToList())
                     {
-                        if (ent.EntityId == MyAPIGateway.Session.Player.Character.EntityId)
-                            continue;
-
                         IMyCharacter character = ent as IMyCharacter;
+                        if (character != null && character.Name != null)
+                            MyVisualScriptLogicProvider.SendChatMessage(character.Name.ToString());
                         if (character != null && (character.Name.Contains("Bot") || string.IsNullOrEmpty(character.Name)))
                         {
-                            if (character.Name != null)
-                                MyVisualScriptLogicProvider.SendChatMessage("Closing: " + character.Name);
-                            else
-                                MyVisualScriptLogicProvider.SendChatMessage("Closing null name");
-
-                            character.DoDamage(1000, MyDamageType.Bullet, true);
-                            //character.Kill();
-                            //character.Close();
-                            characters.Remove(character);
+                            character.Close();
                         }
                     }
+
+                    foreach (var kvp in spawnedInGridsSeatsCharacters)
+                    {
+                        kvp.Character.Close();
+                    }
+                    numberOfBotsSpawned = spawnedInGridsSeatsCharacters.Count();
+                }
+
+                if (messageText == "seat")
+                {
+                    MyVisualScriptLogicProvider.SendChatMessage("Trying to seat");
+                    foreach (var kvp in spawnedInGridsSeatsCharacters)
+                    {
+                        remoteBotAPI.TrySeatBotOnGrid(kvp.Character.EntityId, kvp.Grid);
+                        MyVisualScriptLogicProvider.SendChatMessage(kvp.Character.Name);
+                    }
+                }
+
+                if (messageText == "n")
+                {
+                    MyVisualScriptLogicProvider.SendChatMessage("Number of Bots: " + numberOfBotsSpawned.ToString());
                 }
             }
             catch (Exception e)
@@ -390,28 +603,6 @@ namespace Stollie.NPC_Test
             }
 
         }
-               
-        public override void Draw()
-        {
-            // gets called 60 times a second after all other update methods, regardless of framerate, game pause or MyUpdateOrder.
-            // NOTE: this is the only place where the camera matrix (MyAPIGateway.Session.Camera.WorldMatrix) is accurate, everywhere else it's 1 frame behind.
-        }
 
-        public override void SaveData()
-        {
-            // executed AFTER world was saved
-        }
-
-        public override MyObjectBuilder_SessionComponent GetObjectBuilder()
-        {
-            // executed during world save, most likely before entities.
-
-            return base.GetObjectBuilder(); // leave as-is.
-        }
-
-        public override void UpdatingStopped()
-        {
-            // executed when game is paused
-        }
     }
 }
