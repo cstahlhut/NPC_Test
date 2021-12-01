@@ -66,7 +66,7 @@ namespace Stollie.NPC_Test
                         remoteBotAPI.SpawnBot("Default_Astronaut", "Bot" + " " + botname.ToString(), new MyPositionAndOrientation(MyAPIGateway.Session.LocalHumanPlayer.Character.WorldAABB.Center +
                                 MyAPIGateway.Session.LocalHumanPlayer.Character.WorldMatrix.Forward * 2, localPlayerPosition.Forward, localPlayerPosition.Up),
                         (MyCubeGrid)grid, "BRUISER", MyAPIGateway.Session.LocalHumanPlayer.IdentityId, Color.White);
-
+                        
                         numberOfBotsSpawned++;
                         botname++;
                     }
@@ -88,46 +88,13 @@ namespace Stollie.NPC_Test
                     MyAPIGateway.Utilities.ShowNotification($"[ ERROR: {GetType().FullName}: {e.Message} | Send SpaceEngineers.Log to mod author ]", 10000, MyFontEnum.Red);
             }
         }
-
-        public void SpawnBot(IMyCubeGrid grid)
-        {
-            try
-            {
-                var localPlayerPosition = MyAPIGateway.Session.LocalHumanPlayer.Character.PositionComp.WorldMatrixRef;
-                
-                if (grid != null && grid as MyCubeGrid != null && localPlayerPosition != null)
-                {
-                    MyVisualScriptLogicProvider.SendChatMessage("Spawning bot#: " + botname);
-                    IMyCharacter newbot = remoteBotAPI.SpawnBot("Default_Astronaut", "Bot" + " " + botname.ToString(), new MyPositionAndOrientation(MyAPIGateway.Session.LocalHumanPlayer.Character.WorldAABB.Center +
-                                MyAPIGateway.Session.LocalHumanPlayer.Character.WorldMatrix.Forward * 2, localPlayerPosition.Forward, localPlayerPosition.Up),
-                    (MyCubeGrid)grid, "BRUISER", MyAPIGateway.Session.LocalHumanPlayer.IdentityId, Color.White);                    
-                }
-            }
-            catch (Exception e)
-            {
-                MyAPIGateway.Utilities.ShowNotification($"[ ERROR: {GetType().FullName}: {e.Message} | Send SpaceEngineers.Log to mod author ]", 10000, MyFontEnum.Red);
-            }
-        }
+        
 
         private void OnMessageEntered(string messageText, ref bool sendToOthers)
         {
             try
             {
                 sendToOthers = false;
-                if (messageText == "del")
-                {
-                    MyVisualScriptLogicProvider.SendChatMessage("Deleting..");
-                    foreach (var ent in MyEntities.GetEntities().ToList())
-                    {
-                        IMyCharacter character = ent as IMyCharacter;
-                        if (character != null && character.Name != null)
-                            MyVisualScriptLogicProvider.SendChatMessage(character.Name.ToString());
-                        if (character != null && (character.Name.Contains("Bot") || string.IsNullOrEmpty(character.Name)))
-                        {
-                            character.Close();
-                        }
-                    }
-                }
             }
             catch (Exception e)
             {
