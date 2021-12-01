@@ -142,7 +142,7 @@ namespace Stollie.NPC_Test
             }
         }
 
-        public static bool TrySeatBotOnGrid(IMyCharacter bot, IMyCubeGrid grid)
+        public void TrySeatBotOnGrid(IMyCharacter bot, IMyCubeGrid grid)
         {
             List<IMySlimBlock> seats = new List<IMySlimBlock>();
             List<IMyUseObject> useObjs = new List<IMyUseObject>();
@@ -163,12 +163,9 @@ namespace Stollie.NPC_Test
                     var useObj = useObjs[0];
                     useObj.Use(UseActionEnum.Manipulate, bot);
                     //bot._pathCollection.CleanUp(true);
-                    //bot.Target.RemoveTarget();
-                    return true;
+                    remoteBotAPI.SetBotTarget(bot.EntityId, null);
                 }
             }
-
-            return false;
         }
 
         private void OnMessageEntered(string messageText, ref bool sendToOthers)
