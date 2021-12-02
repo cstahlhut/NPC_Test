@@ -184,8 +184,12 @@ namespace Stollie.NPC_Test
 
                 if (seat == null || seat.Pilot != null ||
                     Vector3D.Distance(seat.GetPosition(), MyAPIGateway.Session.LocalHumanPlayer.Character.GetPosition()) > maxSpawnDistance ||
-                    !allowedSeatTypes.Any(s => blockId.Contains(s)))
+                    !allowedSeatTypes.Any(s => blockId.Contains(s)) || seat.CanControlShip)
+                {
+                    MyVisualScriptLogicProvider.SendChatMessage("Skipping: " + seat.CustomName);
                     continue;
+                }
+                    
 
                 MyVisualScriptLogicProvider.SendChatMessage("Trying seat..." + seat.CustomName);
                 var useComp = seat.Components.Get<MyUseObjectsComponentBase>();
@@ -196,6 +200,7 @@ namespace Stollie.NPC_Test
                     useObj.Use(UseActionEnum.Manipulate, bot);
                     //bot._pathCollection.CleanUp(true);
                     remoteBotAPI.SetBotTarget(bot.EntityId, null);
+                    break;
                 }
             }
         }
