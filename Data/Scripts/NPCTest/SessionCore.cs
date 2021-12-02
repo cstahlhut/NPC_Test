@@ -11,6 +11,7 @@ using VRage.Game;
 using VRage.Game.Components;
 using VRage.Game.Entity.UseObject;
 using VRage.Game.ModAPI;
+using VRage.ModAPI;
 using VRage.Utils;
 using VRageMath;
 
@@ -23,6 +24,7 @@ namespace Stollie.NPC_Test
 
         private int numberOfBotsSpawned = 0;
         private int maxNumberOfAllowedBots = 5;
+        private int maxSpawnDistance = 10;
 
         private static int tickCounter = 0;
         private static int tickCounter10 = 0;
@@ -35,7 +37,13 @@ namespace Stollie.NPC_Test
         private bool start = false;
         private IMyCubeGrid grid;
 
-        ConcurrentCachingList<IMySlimBlock> gridBlocks = new ConcurrentCachingList<IMySlimBlock>();
+        private HashSet<IMyEntity> ents = new HashSet<IMyEntity>();
+        private HashSet<IMyCubeGrid> grids = new HashSet<IMyCubeGrid>();
+
+        private List<IMySlimBlock> seats = new List<IMySlimBlock>();
+        private List<IMyUseObject> useObjs = new List<IMyUseObject>();
+
+        private readonly string[] allowedSeatTypes = new string[] { "Desk", "Couch", "Toilet", "Bathroom", "PassengerSeat", "Bed" };
 
         public override void LoadData()
         {
@@ -59,7 +67,16 @@ namespace Stollie.NPC_Test
 
                 if (!start && remoteBotAPI.CanSpawn)
                 {
+                    MyAPIGateway.Entities.GetEntities(ents);
+                    foreach (var ent in ents)
+                    {
+                        if (ent as IMyCubeGrid != null)
+                            grids.Add(ent as IMyCubeGrid);
+                    }
+
                     MyAPIGateway.Utilities.MessageEntered += OnMessageEntered;
+                    MyAPIGateway.Entities.OnEntityAdd += Entities_OnEntityAdd;
+                    MyAPIGateway.Entities.OnEntityRemove += Entities_OnEntityRemove;
                     MyVisualScriptLogicProvider.SendChatMessage("Ready to spawn...");
                     start = true;
                 }
@@ -71,17 +88,11 @@ namespace Stollie.NPC_Test
                     // Bot spawning
                     if (numberOfBotsSpawned < maxNumberOfAllowedBots && tickCounter == 10)
                     {
-                        var playerSphere = new BoundingSphereD(MyAPIGateway.Session.LocalHumanPlayer.GetPosition(), 10);
-                        var ents = MyAPIGateway.Entities.GetEntitiesInSphere(ref playerSphere);
-                        foreach (var ent in ents)
+                        foreach (var grid in grids)
                         {
-                            if (ent as IMyCubeGrid != null)
-                            {
-                                grid = ent as IMyCubeGrid;
-                                SpawnBot(grid);
-                                numberOfBotsSpawned++;
-                                botname++;
-                            }
+                            SpawnBot(grid);
+                            numberOfBotsSpawned++;
+                            botname++;
                         }
                     }
                 }
@@ -120,6 +131,22 @@ namespace Stollie.NPC_Test
             }
         }
 
+        private void Entities_OnEntityAdd(IMyEntity ent)
+        {
+            if (ent as IMyCubeGrid != null)
+            {
+                ents.Add(ent as IMyCubeGrid);
+            }
+        }
+
+        private void Entities_OnEntityRemove(IMyEntity ent)
+        {
+            if (ent as IMyCubeGrid != null) 
+            {
+                ents.Remove(ent as IMyCubeGrid);
+            }
+        }
+
         public void SpawnBot(IMyCubeGrid grid)
         {
             try
@@ -144,8 +171,7 @@ namespace Stollie.NPC_Test
 
         public void TrySeatBotOnGrid(IMyCharacter bot, IMyCubeGrid grid)
         {
-            List<IMySlimBlock> seats = new List<IMySlimBlock>();
-            List<IMyUseObject> useObjs = new List<IMyUseObject>();
+
             seats.Clear();
             useObjs.Clear();
 
@@ -153,7 +179,10 @@ namespace Stollie.NPC_Test
             for (int i = seats.Count - 1; i >= 0; i--)
             {
                 var seat = seats[i]?.FatBlock as IMyCockpit;
-                if (seat == null || seat.Pilot != null)
+                var blockId = seat?.BlockDefinition.SubtypeId;
+                if (seat == null || seat.Pilot != null ||
+                    Vector3D.Distance(seat.GetPosition(), MyAPIGateway.Session.LocalHumanPlayer.Character.GetPosition()) > maxSpawnDistance ||
+                    !allowedSeatTypes.Any(s => blockId.Contains(s)))
                     continue;
 
                 var useComp = seat.Components.Get<MyUseObjectsComponentBase>();
