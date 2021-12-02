@@ -86,7 +86,7 @@ namespace Stollie.NPC_Test
                 try
                 {
                     // Bot spawning
-                    if (numberOfBotsSpawned < maxNumberOfAllowedBots && tickCounter == 10)
+                    if (numberOfBotsSpawned < maxNumberOfAllowedBots && tickCounter100 == 100)
                     {
                         foreach (var grid in grids)
                         {
@@ -180,11 +180,14 @@ namespace Stollie.NPC_Test
             {
                 var seat = seats[i]?.FatBlock as IMyCockpit;
                 var blockId = seat?.BlockDefinition.SubtypeId;
+                var relationship = MyIDModule.GetRelationPlayerBlock(seat.OwnerId, bot.EntityId, MyOwnershipShareModeEnum.Faction);
+
                 if (seat == null || seat.Pilot != null ||
                     Vector3D.Distance(seat.GetPosition(), MyAPIGateway.Session.LocalHumanPlayer.Character.GetPosition()) > maxSpawnDistance ||
                     !allowedSeatTypes.Any(s => blockId.Contains(s)))
                     continue;
 
+                MyVisualScriptLogicProvider.SendChatMessage("Trying seat..." + seat.CustomName);
                 var useComp = seat.Components.Get<MyUseObjectsComponentBase>();
                 useComp?.GetInteractiveObjects(useObjs);
                 if (useObjs.Count > 0)
