@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using AiEnabled.API;
@@ -23,8 +24,8 @@ namespace Stollie.NPC_Test
         private static SessionCore Instance; // the only way to access session comp from other classes and the only accepted static field.
 
         private int numberOfBotsSpawned = 0;
-        private int maxNumberOfAllowedBots = 5;
-        private int maxSpawnDistance = 10;
+        private int maxNumberOfAllowedBots = 20;
+        private int maxSpawnDistance = 50;
 
         private static int tickCounter = 0;
         private static int tickCounter10 = 0;
@@ -35,15 +36,22 @@ namespace Stollie.NPC_Test
         private int botname = 1;
         private RemoteBotAPI remoteBotAPI;
         private bool start = false;
-        private IMyCubeGrid grid;
+        private bool showCount = true;
+        private bool stop = false;
+        
+        private Random random = new Random();
 
         private HashSet<IMyEntity> ents = new HashSet<IMyEntity>();
         private HashSet<IMyCubeGrid> grids = new HashSet<IMyCubeGrid>();
-
-        private List<IMySlimBlock> seats = new List<IMySlimBlock>();
+        private List<IMySlimBlock> gridBlocks = new List<IMySlimBlock>();
+        
+        private HashSet<IMyCockpit> seats = new HashSet<IMyCockpit>();
         private List<IMyUseObject> useObjs = new List<IMyUseObject>();
 
-        private readonly string[] allowedSeatTypes = new string[] { "Desk", "Couch", "Toilet", "Bathroom", "PassengerSeat", "Bed" };
+        ConcurrentDictionary<IMySlimBlock, IMyCharacter> seatsAndBots = new ConcurrentDictionary<IMySlimBlock, IMyCharacter>();
+
+        private string[] allowedSeatTypes = new string[] { "LargeBlockDesk", "LargeBlockDeskCorner", "LargeBlockCouch", "LargeBlockCouchCorner", "PassengerSeatLarge",
+            "PassengerSeatLarge", "LargeBlockBathroom", "Toilet", "LargeBlockBathroomOpen", "LargeBlockBed" };
 
         public override void LoadData()
         {
@@ -71,7 +79,27 @@ namespace Stollie.NPC_Test
                     foreach (var ent in ents)
                     {
                         if (ent as IMyCubeGrid != null)
+                        {
+                            var grid = ent as IMyCubeGrid;
                             grids.Add(ent as IMyCubeGrid);
+                            grid.OnBlockAdded += Grid_OnBlockAdded;
+                            grid.OnBlockRemoved += Grid_OnBlockRemoved;
+                            gridBlocks.Clear();
+                            grid.GetBlocks(gridBlocks);
+                            foreach (var blk in gridBlocks)
+                            {
+                                var seat = blk.FatBlock as IMyCockpit;
+                                if (seat != null)
+                                {
+                                    var blockId = seat?.BlockDefinition.SubtypeId;
+                                    if (allowedSeatTypes.Contains(blockId) && !seats.Contains(seat))
+                                    {
+                                        //MyVisualScriptLogicProvider.SendChatMessage("Added" + blockId);
+                                        seats.Add(seat);
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     MyAPIGateway.Utilities.MessageEntered += OnMessageEntered;
@@ -81,19 +109,45 @@ namespace Stollie.NPC_Test
                     start = true;
                 }
 
-                if (!remoteBotAPI.CanSpawn) return;
+                if (!remoteBotAPI.CanSpawn || stop == true) return;
+
+                if (showCount)
+                    MyVisualScriptLogicProvider.ShowNotification("Number of bots: " + numberOfBotsSpawned.ToString(), 1);
 
                 try
                 {
                     // Bot spawning
                     if (numberOfBotsSpawned < maxNumberOfAllowedBots && tickCounter100 == 100)
                     {
-                        foreach (var grid in grids)
+                        TrySeatBotOnGrid();
+                    }
+                    
+                    // Bot despawning
+                    if (tickCounter100 == 100)
+                    {
+                        foreach (var seatBot in seatsAndBots)
                         {
-                            SpawnBot(grid);
-                            numberOfBotsSpawned++;
-                            botname++;
+                            if (Vector3D.Distance(seatBot.Key.FatBlock.GetPosition(), MyAPIGateway.Session.LocalHumanPlayer.Character.GetPosition()) > maxSpawnDistance)
+                            {
+                                var seat = seatBot.Key.FatBlock as IMyCockpit;
+                                var pilot = seat.Pilot;
+                                if (pilot != null)
+                                {
+                                    seat.RemovePilot();
+                                    pilot.Close();
+                                }
+                                IMyCharacter botToRemove;
+                                seatsAndBots.TryRemove(seatBot.Key, out botToRemove);
+                                numberOfBotsSpawned--;
+                            }
                         }
+                        //foreach (var seat in seats.ToList())
+                        //{
+                        //    if (Vector3D.Distance(seat.GetPosition(), MyAPIGateway.Session.LocalHumanPlayer.Character.GetPosition()) > maxSpawnDistance)
+                        //    {
+                        //        seats.Remove(seat);
+                        //    }
+                        //}
                     }
                 }
                 catch (Exception ex)
@@ -131,76 +185,122 @@ namespace Stollie.NPC_Test
             }
         }
 
+        private void Grid_OnBlockRemoved(IMySlimBlock blk)
+        {
+            if (blk as IMyCockpit != null)
+            {
+                var cp = blk as IMyCockpit;
+                if (seats.Contains(cp))
+                {
+                    seats.Remove(cp);
+                }
+            }
+        }
+
+        private void Grid_OnBlockAdded(IMySlimBlock blk)
+        {
+            if (blk as IMyCockpit != null)
+            {
+                var cp = blk as IMyCockpit;
+                if (!seats.Contains(cp))
+                {
+                    seats.Add(cp);
+                }
+            }
+        }
+
         private void Entities_OnEntityAdd(IMyEntity ent)
         {
-            if (ent as IMyCubeGrid != null)
+            if (ent as IMyCubeGrid != null && (ent as IMyCubeGrid).Physics != null && !grids.Contains(ent as IMyCubeGrid))
             {
-                ents.Add(ent as IMyCubeGrid);
+                MyVisualScriptLogicProvider.SendChatMessage("Grid Added");
+                var grid = ent as IMyCubeGrid;
+                grids.Add(ent as IMyCubeGrid);
+                gridBlocks.Clear();
+                grid.GetBlocks(gridBlocks);
+                foreach (var blk in gridBlocks)
+                {
+                    var seat = blk.FatBlock as IMyCockpit;
+                    if (seat != null)
+                    {
+                        var blockId = seat?.BlockDefinition.SubtypeId;
+                        if (allowedSeatTypes.Contains(blockId) && !seats.Contains(seat))
+                        {
+                            seats.Add(seat);
+                        }
+                    }
+                }
             }
         }
 
         private void Entities_OnEntityRemove(IMyEntity ent)
         {
-            if (ent as IMyCubeGrid != null) 
+            if (ent as IMyCubeGrid != null)
             {
-                ents.Remove(ent as IMyCubeGrid);
-            }
-        }
-
-        public void SpawnBot(IMyCubeGrid grid)
-        {
-            try
-            {
-                var localPlayerPosition = MyAPIGateway.Session.LocalHumanPlayer.Character.PositionComp.WorldMatrixRef;
-                if (grid != null && grid as MyCubeGrid != null && localPlayerPosition != null)
+                var grid = ent as IMyCubeGrid;
+                gridBlocks.Clear();
+                grid.GetBlocks(gridBlocks);
+                foreach (var blk in gridBlocks)
                 {
-                    MyVisualScriptLogicProvider.SendChatMessage("Spawning bot#: " + botname);
-                    IMyCharacter newbot = remoteBotAPI.SpawnBot("Default_Astronaut", "Bot" + " " + botname.ToString(), new MyPositionAndOrientation(MyAPIGateway.Session.LocalHumanPlayer.Character.WorldAABB.Center +
-                                MyAPIGateway.Session.LocalHumanPlayer.Character.WorldMatrix.Forward * 2, localPlayerPosition.Forward, localPlayerPosition.Up),
-                    (MyCubeGrid)grid, "BRUISER", null, Color.White);
-                    
-                    if (newbot != null)
-                        TrySeatBotOnGrid(newbot, grid);
+                    var seat = blk.FatBlock as IMyCockpit;
+                    if (seat != null)
+                    {
+                        var blockId = seat?.BlockDefinition.SubtypeId;
+                        if (seats.Contains(seat))
+                        {
+                            seats.Remove(seat);
+                        }
+                    }
                 }
-            }
-            catch (Exception e)
-            {
-                MyAPIGateway.Utilities.ShowNotification($"[ ERROR: {GetType().FullName}: {e.Message} | Send SpaceEngineers.Log to mod author ]", 10000, MyFontEnum.Red);
+                grids.Remove(ent as IMyCubeGrid);
             }
         }
 
-        public void TrySeatBotOnGrid(IMyCharacter bot, IMyCubeGrid grid)
+        public void TrySeatBotOnGrid()
         {
-
-            seats.Clear();
             useObjs.Clear();
-
-            grid.GetBlocks(seats, b => b.FatBlock is IMyCockpit);
-            for (int i = seats.Count - 1; i >= 0; i--)
+            var rndRed = random.Next(0, 255);
+            var rndGreen = random.Next(0, 255);
+            var rndBlue = random.Next(0, 255);
+           
+            foreach (var seat in seats)
             {
-                var seat = seats[i]?.FatBlock as IMyCockpit;
                 var blockId = seat?.BlockDefinition.SubtypeId;
-                var relationship = MyIDModule.GetRelationPlayerBlock(seat.OwnerId, bot.EntityId, MyOwnershipShareModeEnum.Faction);
-
                 if (seat == null || seat.Pilot != null ||
                     Vector3D.Distance(seat.GetPosition(), MyAPIGateway.Session.LocalHumanPlayer.Character.GetPosition()) > maxSpawnDistance ||
-                    !allowedSeatTypes.Any(s => blockId.Contains(s)) || seat.CanControlShip)
+                    !allowedSeatTypes.Contains(blockId) || seat.CanControlShip)
                 {
-                    MyVisualScriptLogicProvider.SendChatMessage("Skipping: " + seat.CustomName);
+                    //MyVisualScriptLogicProvider.SendChatMessage("Skipping: " + seat.CustomName);
                     continue;
                 }
-                    
 
-                MyVisualScriptLogicProvider.SendChatMessage("Trying seat..." + seat.CustomName);
-                var useComp = seat.Components.Get<MyUseObjectsComponentBase>();
-                useComp?.GetInteractiveObjects(useObjs);
-                if (useObjs.Count > 0)
+                var localPlayerPosition = MyAPIGateway.Session.LocalHumanPlayer.Character.PositionComp.WorldMatrixRef;
+                var grid = (MyCubeGrid)seat.CubeGrid;
+                if (localPlayerPosition != null && grid != null)
                 {
-                    var useObj = useObjs[0];
-                    useObj.Use(UseActionEnum.Manipulate, bot);
-                    //bot._pathCollection.CleanUp(true);
-                    remoteBotAPI.SetBotTarget(bot.EntityId, null);
-                    break;
+                    
+                    //MyVisualScriptLogicProvider.SendChatMessage("Spawning bot#: " + botname);
+                    IMyCharacter bot = remoteBotAPI.SpawnBot("Default_Astronaut", "Bot" + " " + botname.ToString(), new MyPositionAndOrientation(MyAPIGateway.Session.LocalHumanPlayer.Character.WorldAABB.Center +
+                                MyAPIGateway.Session.LocalHumanPlayer.Character.WorldMatrix.Forward * 2, localPlayerPosition.Forward, localPlayerPosition.Up),
+                    null, "BRUISER", null, new Color(rndRed, rndGreen, rndBlue, 255));
+
+                    if (bot != null)
+                    {
+                        numberOfBotsSpawned++;
+                        botname++;
+                        remoteBotAPI.SetBotTarget(bot.EntityId, null);
+                        //MyVisualScriptLogicProvider.SendChatMessage("Trying seat..." + seat.CustomName);
+                        var useComp = seat.Components.Get<MyUseObjectsComponentBase>();
+                        useComp?.GetInteractiveObjects(useObjs);
+                        if (useObjs.Count > 0)
+                        {
+                            var useObj = useObjs[0];
+                            useObj.Use(UseActionEnum.Manipulate, bot);
+                            //bot._pathCollection.CleanUp(true);
+                            seatsAndBots.TryAdd(seat.SlimBlock, bot);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -223,6 +323,38 @@ namespace Stollie.NPC_Test
                             character.Close();
                         }
                     }
+                    List<IMyPlayer> playerList = new List<IMyPlayer>();
+                    MyAPIGateway.Players.GetPlayers(playerList);
+
+                    foreach (var player in playerList)
+                    {
+                        if (player.IsBot)
+                            player.Character.Close();
+                    }
+                    foreach (var b in seatsAndBots)
+                    {
+                        b.Value.Close();
+                    }
+                }
+
+                if (messageText == "show")
+                {
+                    showCount = true;
+                }
+
+                if (messageText == "hide")
+                {
+                    showCount = false;
+                }
+
+                if (messageText == "stop")
+                {
+                    stop = true;
+                }
+
+                if (messageText == "start")
+                {
+                    stop = false;
                 }
             }
             catch (Exception e)
