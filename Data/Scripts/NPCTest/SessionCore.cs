@@ -335,6 +335,7 @@ namespace Stollie.NPC_Test
                     {
                         b.Value.Close();
                     }
+                    numberOfBotsSpawned = 0;
                 }
 
                 if (messageText == "show")
